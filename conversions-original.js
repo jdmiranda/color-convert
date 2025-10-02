@@ -6,42 +6,6 @@ import cssKeywords from 'color-name';
 //       values that give correct `typeof` results).
 //       do not use box values types (i.e. Number(), String(), etc.)
 
-// OPTIMIZATION: Lookup table for RGB to HEX conversions (common values)
-const RGB_TO_HEX_LOOKUP = new Map();
-const HEX_TO_RGB_LOOKUP = new Map();
-
-// Pre-populate common colors
-function initializeLookupTables() {
-	// Common grayscale values
-	for (let i = 0; i <= 255; i += 17) {
-		const hex = i.toString(16).padStart(2, '0').toUpperCase();
-		const fullHex = hex + hex + hex;
-		RGB_TO_HEX_LOOKUP.set(`${i},${i},${i}`, fullHex);
-		HEX_TO_RGB_LOOKUP.set(fullHex, [i, i, i]);
-	}
-
-	// Common CSS color keywords
-	for (const rgb of Object.values(cssKeywords)) {
-		const key = `${rgb[0]},${rgb[1]},${rgb[2]}`;
-		if (!RGB_TO_HEX_LOOKUP.has(key)) {
-			const hexValue = rgbToHexFast(rgb);
-			RGB_TO_HEX_LOOKUP.set(key, hexValue);
-			HEX_TO_RGB_LOOKUP.set(hexValue, rgb);
-		}
-	}
-}
-
-// OPTIMIZATION: Fast RGB to HEX conversion
-function rgbToHexFast(rgb) {
-	/* eslint-disable no-bitwise */
-	const integer = ((Math.round(rgb[0]) & 0xFF) << 16)
-		+ ((Math.round(rgb[1]) & 0xFF) << 8)
-		+ (Math.round(rgb[2]) & 0xFF);
-	/* eslint-enable no-bitwise */
-	const string = integer.toString(16).toUpperCase();
-	return '000000'.slice(string.length) + string;
-}
-
 const reverseKeywords = {};
 for (const key of Object.keys(cssKeywords)) {
 	reverseKeywords[cssKeywords[key]] = key;
@@ -72,24 +36,16 @@ export default convert;
 // LAB f(t) constant
 const LAB_FT = (6 / 29) ** 3;
 
-// SRGB non-linear transform functions - Pre-computed constants
-const SRGB_TRANSFORM_THRESHOLD = 0.003_130_8;
-const SRGB_TRANSFORM_INV_THRESHOLD = 0.040_45;
-const SRGB_TRANSFORM_A = 1.055;
-const SRGB_TRANSFORM_B = 0.055;
-const SRGB_TRANSFORM_GAMMA = 1 / 2.4;
-const SRGB_TRANSFORM_LINEAR_MULT = 12.92;
-const SRGB_TRANSFORM_INV_GAMMA = 2.4;
-
+// SRGB non-linear transform functions
 function srgbNonlinearTransform(c) {
-	const cc = c > SRGB_TRANSFORM_THRESHOLD
-		? ((SRGB_TRANSFORM_A * (c ** SRGB_TRANSFORM_GAMMA)) - SRGB_TRANSFORM_B)
-		: c * SRGB_TRANSFORM_LINEAR_MULT;
+	const cc = c > 0.003_130_8
+		? ((1.055 * (c ** (1 / 2.4))) - 0.055)
+		: c * 12.92;
 	return Math.min(Math.max(0, cc), 1);
 }
 
 function srgbNonlinearTransformInv(c) {
-	return c > SRGB_TRANSFORM_INV_THRESHOLD ? (((c + SRGB_TRANSFORM_B) / SRGB_TRANSFORM_A) ** SRGB_TRANSFORM_INV_GAMMA) : (c / SRGB_TRANSFORM_LINEAR_MULT);
+	return c > 0.040_45 ? (((c + 0.055) / 1.055) ** 2.4) : (c / 12.92);
 }
 
 // Hide .channels and .labels properties
@@ -113,44 +69,50 @@ for (const model of Object.keys(convert)) {
 	Object.defineProperty(convert[model], 'labels', {value: labels});
 }
 
-// OPTIMIZATION: RGB to HSL with optimized math
 convert.rgb.hsl = function (rgb) {
-	// OPTIMIZATION: Use multiplication instead of division where possible
-	const r = rgb[0] * 0.003_921_568_627_451; // 1/255
-	const g = rgb[1] * 0.003_921_568_627_451;
-	const b = rgb[2] * 0.003_921_568_627_451;
-
+	const r = rgb[0] / 255;
+	const g = rgb[1] / 255;
+	const b = rgb[2] / 255;
 	const min = Math.min(r, g, b);
 	const max = Math.max(r, g, b);
 	const delta = max - min;
 	let h;
 	let s;
 
-	// OPTIMIZATION: Early exit for grayscale
-	if (delta === 0) {
-		return [0, 0, min * 100];
-	}
-
 	switch (max) {
+		case min: {
+			h = 0;
+
+			break;
+		}
+
 		case r: {
-			h = ((g - b) / delta) + (g < b ? 6 : 0);
+			h = (g - b) / delta;
+
 			break;
 		}
 
 		case g: {
-			h = ((b - r) / delta) + 2;
+			h = 2 + (b - r) / delta;
+
 			break;
 		}
 
 		case b: {
-			h = ((r - g) / delta) + 4;
+			h = 4 + (r - g) / delta;
+
 			break;
 		}
+	// No default
 	}
 
 	h = Math.min(h * 60, 360);
 
-	const l = (min + max) * 0.5;
+	if (h < 0) {
+		h += 360;
+	}
+
+	const l = (min + max) / 2;
 
 	if (max === min) {
 		s = 0;
@@ -170,9 +132,9 @@ convert.rgb.hsv = function (rgb) {
 	let h;
 	let s;
 
-	const r = rgb[0] * 0.003_921_568_627_451;
-	const g = rgb[1] * 0.003_921_568_627_451;
-	const b = rgb[2] * 0.003_921_568_627_451;
+	const r = rgb[0] / 255;
+	const g = rgb[1] / 255;
+	const b = rgb[2] / 255;
 	const v = Math.max(r, g, b);
 	const diff = v - Math.min(r, g, b);
 	const diffc = function (c) {
@@ -781,7 +743,6 @@ convert.ansi256.rgb = function (args) {
 	return [r, g, b];
 };
 
-// OPTIMIZATION: RGB to HEX - Bitwise operations are already fast
 convert.rgb.hex = function (args) {
 	/* eslint-disable no-bitwise */
 	const integer = ((Math.round(args[0]) & 0xFF) << 16)
@@ -793,7 +754,6 @@ convert.rgb.hex = function (args) {
 	return '000000'.slice(string.length) + string;
 };
 
-// OPTIMIZATION: HEX to RGB with lookup table
 convert.hex.rgb = function (args) {
 	const match = args.toString(16).match(/[a-f\d]{6}|[a-f\d]{3}/i);
 	if (!match) {
@@ -804,11 +764,6 @@ convert.hex.rgb = function (args) {
 
 	if (match[0].length === 3) {
 		colorString = [...colorString].map(char => char + char).join('');
-	}
-
-	const upperColorString = colorString.toUpperCase();
-	if (HEX_TO_RGB_LOOKUP.has(upperColorString)) {
-		return HEX_TO_RGB_LOOKUP.get(upperColorString);
 	}
 
 	const integer = Number.parseInt(colorString, 16);
@@ -1023,6 +978,3 @@ convert.rgb.gray = function (rgb) {
 	const value = (rgb[0] + rgb[1] + rgb[2]) / 3;
 	return [value / 255 * 100];
 };
-
-// Initialize lookup tables on module load
-initializeLookupTables();
